@@ -4,11 +4,15 @@ import * as pkg from '../../package.json'
 
 const app = express()
 
-app.get('/', (req, res) => {
-  res.send('hello')
-})
-
 const serviceName = pkg.name
 const microservice = makeMicroservice(app, serviceName)
+microservice
+  .app()
+  .get('/', (req, res) => {
+    res.send('hello')
+  })
+  .get('/a', (req, res) => {
+    res.send('aaaa')
+  })
 
-microservice.init()
+await microservice.init()

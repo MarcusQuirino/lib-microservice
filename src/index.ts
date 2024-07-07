@@ -1,4 +1,5 @@
-import type { Express } from 'express'
+import express from 'express'
+import type { Express, Request, Response, NextFunction } from 'express'
 import { connect as amqpConnect, type Connection, type Channel, type ConsumeMessage } from 'amqplib'
 import { MongoClient, Db } from 'mongodb'
 import dotenv from 'dotenv'
@@ -8,6 +9,7 @@ dotenv.config()
 type Microservice = {
   init: () => Promise<void>
   shutdown: () => Promise<void>
+  app: () => Express
 }
 
 async function connectToRabbitMQ(
@@ -46,12 +48,57 @@ export function makeMicroservice(app: Express, serviceName: string): Microservic
   let mongoClient: MongoClient | null = null
   let db: Db | null = null
 
+  const requestResponseMap = new Map<string, Response>()
+
   return {
+    app: () => {
+      app.use(express.json()) // Ensure the app can parse JSON request bodies
+
+      app.use((req: Request, res: Response, next: NextFunction) => {
+        if (rabbitMqChannel) {
+          const requestId = `${Date.now()}-${Math.random()}` // Generate a unique request ID
+          requestResponseMap.set(requestId, res)
+
+          const requestData = {
+            requestId,
+            method: req.method,
+            path: req.path,
+            body: req.body,
+            query: req.query,
+            headers: req.headers,
+          }
+
+          try {
+            rabbitMqChannel.sendToQueue(serviceName, Buffer.from(JSON.stringify(requestData)))
+            console.log('Request pushed to RabbitMQ:', requestData)
+          } catch (err) {
+            console.error('Failed to push request to RabbitMQ:', err)
+            res.status(500).send('Failed to process request')
+          }
+        } else {
+          res.status(500).send('RabbitMQ channel not available')
+        }
+      })
+
+      app.listen(3000, () => {
+        console.log('Microservice is running on port 3000')
+      })
+
+      return app
+    },
     init: async () => {
       try {
         const onMessage = (msg: ConsumeMessage | null) => {
           if (msg) {
             console.log('Received message:', msg.content.toString())
+            const messageData = JSON.parse(msg.content.toString())
+
+            const res = requestResponseMap.get(messageData.requestId)
+            if (res) {
+              res.send(`Processed: ${messageData.path}`)
+              requestResponseMap.delete(messageData.requestId)
+            }
+
             // Process the message here
             rabbitMqChannel?.ack(msg)
           }
@@ -64,13 +111,8 @@ export function makeMicroservice(app: Express, serviceName: string): Microservic
         const mongoDB = await connectToMongoDB()
         mongoClient = mongoDB.client
         db = mongoDB.db
-
-        app.listen(3000, () => {
-          console.log('Microservice is running on port 3000')
-        })
       } catch (error) {
         console.error('Error during initialization:', error)
-        // Optionally add further error handling or recovery logic here
       }
     },
     shutdown: async () => {
@@ -92,8 +134,32 @@ export function makeMicroservice(app: Express, serviceName: string): Microservic
         process.exit(0)
       } catch (error) {
         console.error('Error during shutdown:', error)
-        // Optionally add further error handling or recovery logic here
       }
     },
   }
+}
+
+function getRoutes(app: Express) {
+  const routes: { method: string; path: string }[] = []
+
+  app._router.stack.forEach((middleware: any) => {
+    if (middleware.route) {
+      // Routes registered directly on the app
+      const { path, stack } = middleware.route
+      const method = stack[0].method.toUpperCase()
+      routes.push({ method, path })
+    } else if (middleware.name === 'router') {
+      // Routes added using router.use()
+      middleware.handle.stack.forEach((handler: any) => {
+        const route = handler.route
+        if (route) {
+          const { path, stack } = route
+          const method = stack[0].method.toUpperCase()
+          routes.push({ method, path })
+        }
+      })
+    }
+  })
+
+  console.log(routes)
 }
