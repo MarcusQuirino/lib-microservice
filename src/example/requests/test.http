@@ -1,1 +1,15 @@
-GET http://localhost:3000/
+POST http://localhost:3000/invoice.post
+Content-Type: application/json
+
+{
+  "data": {
+    "invoice": {
+      "buyerID": "buyer123",
+      "amount": {
+        "totalAmount": 1500,
+        "currencyCode": "USD"
+      },
+      "appID": "app456"
+    }
+  }
+}

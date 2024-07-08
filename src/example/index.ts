@@ -1,17 +1,18 @@
 import { makeMicroservice } from '../index'
 import express from 'express'
 import * as pkg from '../../package.json'
+import { events } from './config/events'
 
 const app = express()
 
 const serviceName = pkg.name
-const microservice = makeMicroservice(app, serviceName)
+const microservice = makeMicroservice(app, serviceName, events)
 microservice
   .app()
-  .get('/', (req, res) => {
+  .post('/invoice.create', (req, res) => {
     res.send('hello')
   })
-  .get('/a', (req, res) => {
+  .get('/sla', (req, res) => {
     res.send('aaaa')
   })
 

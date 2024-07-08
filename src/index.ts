@@ -3,6 +3,7 @@ import type { Express, Request, Response, NextFunction } from 'express'
 import { connect as amqpConnect, type Connection, type Channel, type ConsumeMessage } from 'amqplib'
 import { MongoClient, Db } from 'mongodb'
 import dotenv from 'dotenv'
+import type { EventHandler } from './types'
 
 dotenv.config()
 
@@ -42,7 +43,11 @@ async function connectToMongoDB(): Promise<{ client: MongoClient; db: Db }> {
   }
 }
 
-export function makeMicroservice(app: Express, serviceName: string): Microservice {
+export function makeMicroservice(
+  app: Express,
+  serviceName: string,
+  events: Map<string, EventHandler>,
+): Microservice {
   let rabbitMqConnection: Connection | null = null
   let rabbitMqChannel: Channel | null = null
   let mongoClient: MongoClient | null = null
@@ -95,11 +100,22 @@ export function makeMicroservice(app: Express, serviceName: string): Microservic
 
             const res = requestResponseMap.get(messageData.requestId)
             if (res) {
-              res.send(`Processed: ${messageData.path}`)
+              const handler = events.get(messageData.path)
+              if (handler !== undefined) {
+                const response = handler(messageData.body)
+                if (response.error) {
+                  res
+                    .status(response.error.status)
+                    .json({ data: { error: response.error.message } })
+                }
+                res.json({ data: response.data })
+              } else {
+                res
+                  .status(404)
+                  .json({ data: { error: `no handler match this url: ${messageData.path}` } })
+              }
               requestResponseMap.delete(messageData.requestId)
             }
-
-            // Process the message here
             rabbitMqChannel?.ack(msg)
           }
         }
